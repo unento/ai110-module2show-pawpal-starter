@@ -93,19 +93,41 @@ The full script also prints the tasks before and after `sort_by_time()`, then co
 
 ## 🧪 Testing PawPal+
 
+Run the full test suite from the project root:
+
 ```bash
-# Run the full test suite:
-pytest
-
-# Run with coverage:
-pytest --cov
+python -m pytest
 ```
 
-Sample test output:
+The tests live in [`test/test_pawpal.py`](test/test_pawpal.py) (28 tests). They cover:
+
+- **Sorting correctness**: the final plan comes out in clock order even when priority says otherwise; priority sorts high → medium → low (not alphabetically); ties put tasks with a preferred time first and otherwise keep their original order; `sort_by_time()` puts tasks with no time last.
+- **Recurrence logic**: completing a daily task creates a new one due the next day that appears in tomorrow's plan (and not today's); weekly tasks come back 7 days later; `"once"` tasks and repeat completions create nothing; the new copy keeps the task's settings; an overdue task completed late is next due after today, not still in the past.
+- **Conflict detection**: two tasks at the exact same time are flagged, for the same pet or for different pets, both when added and in the plan; partial overlaps are flagged; tasks that touch end-to-start (09:00–09:30, then 09:30) and completed tasks are not.
+- **Scheduling around fixed times**: flexible tasks are placed back to back and jump past fixed appointments; no flexible task runs past midnight (it is skipped instead, and a shorter task can still use the slot).
+- **Edge cases**: an owner with no pets, a pet with no tasks, a budget of 0 minutes, a task that exactly fills the remaining time, a small task fitting after a big one is skipped, overdue vs. future tasks, invalid `start_time` values, and filtering by pet name and completion.
+
+Output of a successful run:
 
 ```
-# Paste your pytest output here
+============================= test session starts =============================
+platform win32 -- Python 3.14.3, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Users\unent\Documents\codepath\ai110-module2show-pawpal-starter
+plugins: anyio-4.15.1
+collected 28 items
+
+test\test_pawpal.py ............................                         [100%]
+
+============================= 28 passed in 0.14s ==============================
 ```
+
+### Confidence Level: ★★★★☆ (4/5)
+
+All 28 tests pass, and they cover the main scheduling behaviors plus the edge cases most likely to break: empty inputs, exact time-budget boundaries, same-time conflicts, and recurring tasks. Writing these tests found two real bugs (overdue tasks coming back the same day, and times past midnight like `25:00`), and both are now fixed and tested. It isn't 5 stars because:
+
+- the Streamlit UI in `app.py` has no automated tests;
+- a fixed appointment that crosses midnight (e.g. 23:50 for 30 min) is still scheduled as-is;
+- the scheduler plans one day at a time with a simple greedy pass, so it won't always find the best possible fit for the time available.
 
 ## 📐 Smarter Scheduling
 
@@ -116,7 +138,7 @@ All scheduling logic lives in [`pawpal_system.py`](pawpal_system.py). `Scheduler
 | Task sorting | `Scheduler.sort_by_priority()`, `Scheduler.sort_by_time()`, `Scheduler.assign_clock_times()` | Priority decides what makes the plan; time of day and clock time decide the order |
 | Filtering | `Scheduler.filter_tasks()`, `Scheduler.collect_tasks()`, `Scheduler.fits_in_time()` | By pet name and/or completion status; only tasks due today; skip tasks that don't fit |
 | Conflict handling | `Scheduler.detect_conflicts()`, `Scheduler.add_task()` | Real clock-time overlaps, for the same pet or different pets; returns warnings, never crashes |
-| Recurring tasks | `Task.mark_complete()`, `Scheduler.complete_task()` | Completing a daily or weekly task creates the next one, due 1 or 7 days later |
+| Recurring tasks | `Task.mark_complete()`, `Scheduler.complete_task()` | Completing a daily or weekly task creates the next one, due 1 or 7 days later (counted from today if it was done late) |
 
 ### Sorting
 
@@ -127,7 +149,7 @@ All scheduling logic lives in [`pawpal_system.py`](pawpal_system.py). `Scheduler
   3. otherwise the owner's preference for its category, e.g. `{"walk": "morning"}`
 
   The sort is stable, so tasks in the same part of the day keep their original order.
-- **`Scheduler.assign_clock_times(items)`**: puts the final plan in real clock order. Tasks with a fixed `start_time` keep it. Every other task is placed back to back, starting at 08:00 for morning, 13:00 for afternoon and 18:00 for evening. If one would run into a fixed appointment, it moves to just after it.
+- **`Scheduler.assign_clock_times(items)`**: puts the final plan in real clock order. Tasks with a fixed `start_time` keep it. Every other task is placed back to back, starting at 08:00 for morning, 13:00 for afternoon and 18:00 for evening. If one would run into a fixed appointment, it moves to just after it. A flexible task that would run past midnight is skipped instead, with the reason shown in the plan.
 
 ### Filtering
 
@@ -160,9 +182,10 @@ Each task has a `frequency` (`"once"`, `"daily"` or `"weekly"`) and a `due_date`
 
 - **`Task.mark_complete()`**: marks the task done and returns a new copy for the next occurrence, or `None` for a `"once"` task.
   - A daily task's copy is due 1 day after the original's due date, and a weekly task's 7 days after.
+  - If you pass `completed_on` and it's later than the due date (the task was done late), the gap is counted from `completed_on` instead, so the copy is never already overdue.
   - The copy keeps every other field but gets its own id, so it's a separate task.
   - Completing a task that's already done returns `None`, so it can't create a duplicate.
-- **`Scheduler.complete_task(pet, task)`**: the method to call in practice. It runs `mark_complete()` and adds the new copy to the same pet, which `Task` can't do because it doesn't know which pet it belongs to.
+- **`Scheduler.complete_task(pet, task)`**: the method to call in practice. It runs `mark_complete(completed_on=today)` and adds the new copy to the same pet, which `Task` can't do because it doesn't know which pet it belongs to.
 
 `collect_tasks()` only includes tasks due today or earlier, so the next copy appears in the plan on the day it's due.
 

@@ -25,6 +25,9 @@ TIME_OF_DAY_ORDER = {"morning": 0, "afternoon": 1, "evening": 2}
 # Clock time (minutes after midnight) that each part of the day starts at.
 TIME_OF_DAY_START = {"morning": 8 * 60, "afternoon": 13 * 60, "evening": 18 * 60}
 
+# Midnight, in minutes after midnight. Flexible tasks must end by then.
+END_OF_DAY = 24 * 60
+
 CLOCK_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")  # zero-padded 24h "HH:MM"
 
 
@@ -129,12 +132,14 @@ class Task:
         """Return True if this task is high priority."""
         return self.priority == "high"
 
-    def mark_complete(self) -> Optional[Task]:
+    def mark_complete(self, completed_on: Optional[date] = None) -> Optional[Task]:
         """Mark this task as done and return its next occurrence, or None if it doesn't recur.
 
         A "daily" task comes back due one day after this one, a "weekly" task one
-        week after. Completing an already-completed task returns None, so calling
-        this twice can't create a duplicate next occurrence.
+        week after. If it was done late (completed_on is after its due date), the
+        gap is counted from completed_on instead, so the next occurrence is never
+        already overdue. Completing an already-completed task returns None, so
+        calling this twice can't create a duplicate next occurrence.
         """
         if self.completed:
             return None
@@ -142,8 +147,9 @@ class Task:
         gap = RECURRENCE_GAP.get(self.frequency)
         if gap is None:
             return None
+        base = max(self.due_date, completed_on) if completed_on else self.due_date
         # replace() builds a new Task, so it gets a fresh id and is validated again.
-        return replace(self, completed=False, due_date=self.due_date + gap)
+        return replace(self, completed=False, due_date=base + gap)
 
 
 @dataclass
@@ -305,9 +311,11 @@ class Scheduler:
     def complete_task(self, pet: Pet, task: Task) -> Optional[Task]:
         """Mark the pet's task complete and add its next occurrence (if any) to the same pet.
 
+        The task counts as completed on the scheduler's day, so an overdue task's
+        next occurrence is due after today rather than still in the past.
         Returns the new task so callers can show it, or None for a "once" task.
         """
-        next_task = task.mark_complete()
+        next_task = task.mark_complete(completed_on=self.today)
         if next_task is not None:
             pet.add_task(next_task)
         return next_task
@@ -382,6 +390,9 @@ class Scheduler:
         morning -> afternoon -> evening -> anytime, each starting no earlier than
         its part of the day (e.g. 13:00 for afternoon) and jumping past any fixed
         task it would overlap. So only two fixed tasks can ever overlap each other.
+
+        A flexible task that would end after midnight is left with no start time
+        and is not returned; the caller decides what to do with it.
         """
         fixed = [item for item in items if item.task.start_time]
         flexible = [item for item in items if not item.task.start_time]
@@ -398,10 +409,13 @@ class Scheduler:
             for busy_start, busy_minutes in busy:
                 if _overlaps(start, item.task.duration_minutes, busy_start, busy_minutes):
                     start = busy_start + busy_minutes  # move to just after the fixed task
+            if start + item.task.duration_minutes > END_OF_DAY:
+                continue  # leave the cursor alone so a shorter task after it may still fit
             item.start_minute = start
             cursor = item.end_minute
 
-        return sorted(items, key=lambda item: item.start_minute)
+        timed = [item for item in items if item.start_minute is not None]
+        return sorted(timed, key=lambda item: item.start_minute)
 
     def detect_conflicts(self, items: list[PlanItem]) -> list[str]:
         """Return one warning for each pair of items whose clock times overlap.
@@ -484,6 +498,14 @@ class Scheduler:
                 )
                 plan.skipped.append(PlanItem(pet, task, reason))
 
-        plan.scheduled = self.assign_clock_times(plan.scheduled)
+        timed = self.assign_clock_times(plan.scheduled)
+        for item in plan.scheduled:
+            if item.start_minute is None:
+                item.reason = (
+                    f"{item.task.priority} priority, but its {item.task.duration_minutes} min "
+                    "would run past midnight"
+                )
+                plan.skipped.append(item)
+        plan.scheduled = timed
         plan.conflicts = self.detect_conflicts(plan.scheduled)
         return plan

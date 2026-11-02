@@ -171,3 +171,214 @@ def test_two_tasks_at_exact_same_time_are_flagged():
     assert add_warnings == ["Ear drops (Luna, 09:00-09:05) overlaps Vet checkup (Rex, 09:00-09:45); different pets"]
     assert plan.conflicts == [expected]
     assert expected in plan.explain()
+
+
+# --- Sorting correctness ---
+
+
+def test_plan_is_in_chronological_order_regardless_of_priority():
+    rex = Pet("Rex", "dog", 4)
+    rex.add_task(Task("Evening walk", 30, "high", "walk", preferred_time="evening"))
+    rex.add_task(Task("Lunch meds", 5, "medium", "meds", start_time="12:00"))
+    rex.add_task(Task("Brush coat", 15, "low", "grooming", preferred_time="morning"))
+    rex.add_task(Task("Puzzle toy", 20, "low", "enrichment", preferred_time="afternoon"))
+
+    plan = Scheduler(Owner("Sam", 120, pets=[rex])).generate_plan()
+
+    assert [(i.task.title, i.start) for i in plan.scheduled] == [
+        ("Brush coat", "08:00"),
+        ("Lunch meds", "12:00"),
+        ("Puzzle toy", "13:00"),
+        ("Evening walk", "18:00"),
+    ]
+    starts = [i.start_minute for i in plan.scheduled]
+    assert starts == sorted(starts)
+
+
+def test_sort_by_priority_is_by_rank_not_alphabetical():
+    scheduler = Scheduler(Owner("Sam", 60))
+    rex = Pet("Rex", "dog", 4)
+    low = Task("Brush", 10, "low", "grooming")
+    high = Task("Meds", 5, "high", "meds")
+    medium = Task("Feed", 10, "medium", "feeding")
+
+    result = scheduler.sort_by_priority([(rex, low), (rex, high), (rex, medium)])
+
+    assert [task for _, task in result] == [high, medium, low]
+
+
+def test_priority_ties_keep_tasks_with_a_time_first_then_original_order():
+    scheduler = Scheduler(Owner("Sam", 60, preferences={"walk": "morning"}))
+    rex = Pet("Rex", "dog", 4)
+    first = Task("Brush", 10, "high", "grooming")
+    second = Task("Toy", 10, "high", "enrichment")
+    timed = Task("Walk", 10, "high", "walk")  # morning via owner preference
+
+    result = scheduler.sort_by_priority([(rex, first), (rex, second), (rex, timed)])
+
+    assert [task for _, task in result] == [timed, first, second]
+
+
+# --- Recurrence logic ---
+
+
+def test_completed_daily_task_shows_up_in_tomorrows_plan():
+    rex = Pet("Rex", "dog", 4)
+    walk = Task("Walk", 30, "high", "walk", frequency="daily", due_date=date(2026, 11, 1))
+    rex.add_task(walk)
+    owner = Owner("Sam", 60, pets=[rex])
+
+    next_walk = Scheduler(owner, today=date(2026, 11, 1)).complete_task(rex, walk)
+    tomorrow = Scheduler(owner, today=date(2026, 11, 2)).generate_plan()
+
+    assert next_walk.due_date == date(2026, 11, 2)
+    assert [i.task for i in tomorrow.scheduled] == [next_walk]  # the completed walk is not repeated
+
+
+def test_next_occurrence_keeps_the_tasks_settings():
+    vet = Task("Vet", 30, "high", "meds", frequency="weekly", start_time="09:00", due_date=date(2026, 11, 1))
+
+    nxt = vet.mark_complete()
+
+    assert (nxt.title, nxt.priority, nxt.category, nxt.start_time, nxt.frequency) == (
+        "Vet", "high", "meds", "09:00", "weekly",
+    )
+    assert nxt.completed is False and vet.completed is True
+
+
+def test_completing_an_overdue_daily_task_does_not_put_it_back_in_todays_plan():
+    rex = Pet("Rex", "dog", 4)
+    walk = Task("Walk", 30, "high", "walk", frequency="daily", due_date=date(2026, 10, 25))
+    rex.add_task(walk)
+    scheduler = Scheduler(Owner("Sam", 60, pets=[rex]), today=date(2026, 11, 1))
+
+    next_walk = scheduler.complete_task(rex, walk)
+
+    assert next_walk.due_date == date(2026, 11, 2)  # counted from today, not from the old due date
+    assert scheduler.collect_tasks() == []
+
+
+# --- Conflict detection ---
+
+
+def test_duplicate_times_for_the_same_pet_are_flagged():
+    rex = Pet("Rex", "dog", 4)
+    scheduler = Scheduler(Owner("Sam", 60, pets=[rex]))
+    scheduler.add_task(rex, Task("Breakfast", 10, "high", "feeding", start_time="08:00"))
+
+    warnings = scheduler.add_task(rex, Task("Breakfast", 10, "high", "feeding", start_time="08:00"))
+    plan = scheduler.generate_plan()
+
+    expected = "Breakfast (Rex, 08:00-08:10) overlaps Breakfast (Rex, 08:00-08:10); both for Rex"
+    assert warnings == [expected]
+    assert plan.conflicts == [expected]
+
+
+def test_back_to_back_tasks_are_not_a_conflict():
+    rex = Pet("Rex", "dog", 4)
+    rex.add_task(Task("Walk", 30, "high", "walk", start_time="09:00"))
+    rex.add_task(Task("Feed", 10, "high", "feeding", start_time="09:30"))
+
+    plan = Scheduler(Owner("Sam", 60, pets=[rex])).generate_plan()
+
+    assert plan.conflicts == []
+
+
+def test_completed_task_at_same_time_is_not_a_conflict():
+    rex = Pet("Rex", "dog", 4)
+    scheduler = Scheduler(Owner("Sam", 60, pets=[rex]))
+    done = Task("Vet", 30, "high", "meds", frequency="once", start_time="09:00")
+    scheduler.add_task(rex, done)
+    done.mark_complete()
+
+    warnings = scheduler.add_task(rex, Task("Groomer", 30, "medium", "grooming", start_time="09:00"))
+
+    assert warnings == []
+    assert scheduler.generate_plan().conflicts == []
+
+
+# --- Empty inputs and time budget boundaries ---
+
+
+def test_owner_with_no_pets_and_pet_with_no_tasks_give_an_empty_plan():
+    for owner in (Owner("Sam", 60), Owner("Sam", 60, pets=[Pet("Rex", "dog", 4)])):
+        plan = Scheduler(owner).generate_plan()
+
+        assert plan.scheduled == [] and plan.skipped == [] and plan.conflicts == []
+        assert plan.total_time() == 0
+        assert "Nothing could be scheduled." in plan.explain()
+
+
+def test_zero_available_minutes_skips_everything():
+    rex = Pet("Rex", "dog", 4)
+    rex.add_task(Task("Meds", 5, "high", "meds"))
+
+    plan = Scheduler(Owner("Sam", 0, pets=[rex])).generate_plan()
+
+    assert plan.scheduled == []
+    assert [i.task.title for i in plan.skipped] == ["Meds"]
+
+
+def test_task_that_exactly_fills_remaining_time_is_scheduled():
+    rex = Pet("Rex", "dog", 4)
+    rex.add_task(Task("Walk", 30, "high", "walk"))
+    rex.add_task(Task("Feed", 30, "low", "feeding"))
+
+    plan = Scheduler(Owner("Sam", 60, pets=[rex])).generate_plan()
+
+    assert plan.skipped == []
+    assert plan.total_time() == 60
+
+
+def test_smaller_task_still_fits_after_a_bigger_one_is_skipped():
+    rex = Pet("Rex", "dog", 4)
+    rex.add_task(Task("Long hike", 45, "high", "walk"))
+    rex.add_task(Task("Feed", 20, "low", "feeding"))
+
+    plan = Scheduler(Owner("Sam", 30, pets=[rex])).generate_plan()
+
+    assert [i.task.title for i in plan.scheduled] == ["Feed"]
+    assert [i.task.title for i in plan.skipped] == ["Long hike"]
+
+
+def test_overdue_tasks_are_planned_and_future_tasks_are_not():
+    rex = Pet("Rex", "dog", 4)
+    overdue = Task("Meds", 5, "high", "meds", due_date=date(2026, 10, 31))
+    future = Task("Bath", 20, "low", "grooming", due_date=date(2026, 11, 2))
+    rex.add_task(overdue)
+    rex.add_task(future)
+
+    plan = Scheduler(Owner("Sam", 60, pets=[rex]), today=date(2026, 11, 1)).generate_plan()
+
+    assert [i.task for i in plan.scheduled] == [overdue]
+
+
+def test_scheduled_times_never_run_past_midnight():
+    rex = Pet("Rex", "dog", 4)
+    for n in range(8):
+        rex.add_task(Task(f"Play {n}", 60, "low", "enrichment", preferred_time="evening"))
+
+    plan = Scheduler(Owner("Sam", 600, pets=[rex])).generate_plan()
+
+    # 18:00-24:00 holds six one-hour tasks; the other two are skipped, not given times like 25:00.
+    assert all(i.end_minute <= 24 * 60 for i in plan.scheduled)
+    assert len(plan.scheduled) == 6
+    assert plan.scheduled[-1].end == "24:00"
+    assert [i.task.title for i in plan.skipped] == ["Play 6", "Play 7"]
+    assert all("past midnight" in i.reason for i in plan.skipped)
+    assert plan.total_time() == 360
+
+
+def test_shorter_task_still_fits_before_midnight_after_a_longer_one_is_dropped():
+    rex = Pet("Rex", "dog", 4)
+    rex.add_task(Task("Evening walk", 330, "high", "walk", preferred_time="evening"))  # 18:00-23:30
+    rex.add_task(Task("Long chew", 60, "medium", "enrichment"))  # would end 00:30
+    rex.add_task(Task("Treat", 10, "low", "feeding"))
+
+    plan = Scheduler(Owner("Sam", 600, pets=[rex])).generate_plan()
+
+    assert [(i.task.title, i.start, i.end) for i in plan.scheduled] == [
+        ("Evening walk", "18:00", "23:30"),
+        ("Treat", "23:30", "23:40"),
+    ]
+    assert [i.task.title for i in plan.skipped] == ["Long chew"]
