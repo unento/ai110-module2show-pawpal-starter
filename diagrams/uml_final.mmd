@@ -1,0 +1,122 @@
+classDiagram
+    %% PawPal+ class design. Keep this file updated so it matches your final implementation.
+
+    class Owner {
+        +str name
+        +int available_minutes
+        +dict~str, str~ preferences
+        +list~Pet~ pets
+        -__post_init__() None
+        +add_pet(pet: Pet) None
+        +get_pets() list~Pet~
+        +get_all_tasks() list~tuple~Pet,Task~~
+    }
+
+    class Pet {
+        +str name
+        +str species
+        +int age
+        +list~Task~ tasks
+        +add_task(task: Task) None
+        +remove_task(task: Task) None
+        +get_tasks() list~Task~
+    }
+
+    class Task {
+        +str title
+        +int duration_minutes
+        +str priority
+        +str category
+        +str? preferred_time
+        +str frequency
+        +bool completed
+        +date due_date
+        +str? start_time
+        +str id
+        -__post_init__() None
+        +edit(**changes) None
+        +is_high_priority() bool
+        +mark_complete(completed_on: date) Task?
+    }
+
+    class Scheduler {
+        +Owner owner
+        +date today
+        +collect_tasks() list~tuple~Pet,Task~~
+        +complete_task(pet: Pet, task: Task) Task?
+        +filter_tasks(completed: bool, pet_name: str) list~tuple~Pet,Task~~
+        +preferred_time_for(task: Task) str?
+        +sort_by_priority(pairs) list~tuple~Pet,Task~~
+        +fits_in_time(task: Task, minutes_left: int) bool
+        +sort_by_time(tasks: list~Task~) list~Task~
+        +order_by_time_of_day(items) list~PlanItem~
+        +assign_clock_times(items) list~PlanItem~
+        +detect_conflicts(items) list~str~
+        +add_task(pet: Pet, task: Task) list~str~
+        +generate_plan() DailyPlan
+    }
+
+    class PlanItem {
+        +Pet pet
+        +Task task
+        +str reason
+        +str? time
+        +int? start_minute
+        +end_minute int? «property»
+        +start str? «property»
+        +end str? «property»
+    }
+
+    class DailyPlan {
+        +int available_minutes
+        +list~PlanItem~ scheduled
+        +list~PlanItem~ skipped
+        +list~str~ conflicts
+        +total_time() int
+        +explain() str
+        +to_table() list~dict~
+    }
+
+    class pawpal_system {
+        <<module>>
+        +dict PRIORITY_RANK
+        +set CATEGORIES
+        +set FREQUENCIES
+        +dict RECURRENCE_GAP
+        +dict TIME_OF_DAY_ORDER
+        +dict TIME_OF_DAY_START
+        +int END_OF_DAY
+        +Pattern CLOCK_PATTERN
+        +to_minutes(clock: str) int
+        +to_clock(minutes: int) str
+        +time_of_day_for(clock: str) str
+        -_overlaps(start_a, minutes_a, start_b, minutes_b) bool
+        -_span(start: int, minutes: int) str
+        -_overlap_warning(pet_a, task_a, start_a, pet_b, task_b, start_b) str
+        -_validate_task_field(name: str, value) None
+    }
+
+    class app {
+        <<Streamlit UI>>
+    }
+
+    Owner "1" o-- "0..*" Pet : owns
+    Pet "1" *-- "0..*" Task : has
+    Task ..> Task : next occurrence
+    Scheduler --> Owner : plans for
+    Scheduler ..> Pet : adds tasks to
+    Scheduler ..> Task : completes
+    Scheduler ..> PlanItem : creates
+    Scheduler ..> DailyPlan : creates
+    Scheduler ..> pawpal_system : uses
+    Task ..> pawpal_system : validated by
+    Owner ..> pawpal_system : validated by
+    PlanItem ..> pawpal_system : formats times with
+    app --> Owner : session state
+    app --> Scheduler : drives
+    app ..> Pet : creates
+    app ..> Task : creates
+    app ..> DailyPlan : displays
+    DailyPlan "1" *-- "0..*" PlanItem : contains
+    PlanItem "0..*" --> "1" Pet : for
+    PlanItem "0..*" --> "1" Task : wraps

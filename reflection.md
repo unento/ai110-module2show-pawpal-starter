@@ -54,6 +54,17 @@ Yes. After drafting the skeleton, I reviewed it for missing relationships and lo
 - What constraints does your scheduler consider (for example: time, priority, preferences)?
 - How did you decide which constraints mattered most?
 
+The scheduler considers these constraints, roughly from strictest to softest:
+
+- **Available time** (hard limit): the plan never uses more minutes than the owner has. Tasks that don't fit are skipped with a reason.
+- **Priority** (decides what gets in): high → medium → low decides which tasks claim the time budget first.
+- **Due date and completion**: only unfinished tasks due today or overdue are planned, so tomorrow's copy of a daily task stays out of today's plan.
+- **Fixed start times**: an appointment like a vet visit at 09:00 keeps its time, and flexible tasks are moved around it.
+- **Preferred time of day**: a task's own `preferred_time`, or else the owner's preference for its category (`{"walk": "morning"}`), decides *when* a task happens, not *whether* it happens. It only affects selection as a tie-breaker between tasks of equal priority.
+- **End of day**: a flexible task that would run past midnight is skipped.
+
+I ranked them by asking what goes wrong if each one is ignored. Ignoring the time budget gives the owner a plan they can't follow, and ignoring priority could drop a pet's meds in favour of a laser pointer session. Both of those hurt the pet or the owner's trust in the app. Getting a walk in the afternoon instead of the morning is only an inconvenience, so time-of-day preferences shape the order of the day but never knock a task out of it.
+
 **b. Tradeoffs**
 
 - Describe one tradeoff your scheduler makes.
@@ -78,10 +89,57 @@ The cost is that some days the plan leaves time unused that a smarter combinatio
 - How did you use AI tools during this project (for example: design brainstorming, debugging, refactoring)?
 - What kinds of prompts or questions were most helpful?
 
+I used AI in every phase, but for a different job in each:
+
+- **Design**: turning my UML into class skeletons, then reviewing the skeleton for missing relationships and logic bottlenecks before any method bodies were written. Most of the design changes in section 1b came out of that review.
+- **Implementation**: building the scheduling logic in small steps (priority sorting, then time-of-day ordering, then clock times, conflicts and recurrence), checking each step with `main.py` before moving on.
+- **Testing**: drafting the pytest suite and thinking up edge cases.
+- **UI and docs**: wiring the logic into `app.py`, updating the UML to match the final code, and writing the README.
+
+The most helpful prompts were specific and pointed at real code: "review this skeleton for missing relationships", "based on my final implementation, what should change in my UML?", or "what edge cases could break recurring tasks?". Prompts that asked the AI to compare the code against something (the UML, the requirements, an edge case) were more useful than open-ended "write this feature" prompts, because the answers were things I could check.
+
 **b. Judgment and verification**
 
 - Describe one moment where you did not accept an AI suggestion as-is.
 - How did you evaluate or verify what the AI suggested?
+
+The class skeleton gave `Scheduler` its own `tasks` list, passed into its constructor. It looked harmless, but the same tasks already lived on each `Pet`, so there would be two copies that could drift apart, and the scheduler would silently plan nothing if I forgot to pass the list. I removed it and made the pets the only place tasks are stored: the scheduler reads them through `Owner.get_all_tasks()`, which also keeps each task paired with its pet so the plan can say who a task is for.
+
+To verify AI output I relied on running things rather than reading them:
+
+- **Tests**: every scheduling behaviour has a test, and writing them caught two real bugs in code that had looked correct: overdue recurring tasks coming back already overdue, and start times like `25:00` being accepted.
+- **The demo script**: `python main.py` prints the plan and its reasons, so I could check the schedule against what I expected by hand.
+- **Docs against code**: when the AI wrote the README's example workflow, I had the steps run through the real scheduler. The first draft claimed the vet visit would be scheduled and the walk skipped; the actual output was the reverse, so the walkthrough was corrected before it went in.
+
+**c. AI Strategy**
+
+- Which AI coding assistant features were most effective for building your scheduler?
+- Give one example of an AI suggestion you rejected or modified to keep your system design clean.
+- How did using separate chat sessions for different phases help you stay organized?
+- Summarize what you learned about being the "lead architect" when collaborating with powerful AI tools.
+
+**Most effective features**
+
+- **Design and UML review in chat** had the biggest impact on the final code. Asking for a review of the skeleton *before* implementing caught the flat task list, the reasons that weren't tied to their tasks, and the alphabetical priority sort while they were still cheap to fix.
+- **Test generation** gave me a broad edge-case suite quickly (empty owners, exact time-budget boundaries, touching vs. overlapping appointments, late completions), and those tests found bugs I hadn't thought to look for.
+- **Agent multi-file edits** were useful once the design was settled: a change like adding `start_time` touched `pawpal_system.py`, `app.py`, the tests and the README together, and the agent could keep them consistent.
+- **Inline completion and "explain this code"** were handy for small things, like helper functions and Streamlit widget options, and for re-reading my own code after a break.
+
+**A suggestion I rejected**
+
+The skeleton's `Scheduler(owner, tasks)` constructor (described in 3b). I kept the scheduler but removed its task list, so tasks live only on pets and the scheduler always reads the current state through the owner. It was a one-line change, but it decided how every later feature worked: filtering by pet, conflict warnings that name the pet, and adding a recurring task's next copy to the right pet all depend on tasks staying attached to their pet.
+
+**Separate chat sessions per phase**
+
+I started a new chat for each phase: design/UML, implementing the logic, testing, and UI/docs. That helped in three ways:
+
+- **Focused context**: each chat only had to hold one job, so the answers stayed on topic. The testing chat didn't drift into redesigning classes, and the docs chat didn't start rewriting the scheduler.
+- **Fresh eyes on the code**: a new session had to read the code as it actually was, not as an earlier chat remembered it. That's how the UML review in the docs phase spotted relationships the original diagram was missing.
+- **Clear checkpoints**: finishing a phase meant committing and moving on, so the git history follows the phases (skeleton → implementation → sorting/conflicts → tests), which made it easy to see what changed and why.
+
+**Being the lead architect**
+
+The AI is fast at producing code, but it doesn't own the design; I do. It will happily build on whatever structure it's given, including a flawed one, and its mistakes sound just as confident as its correct answers. So my job was to decide what the system should be (which class owns which data, which constraints are hard and which are soft, what happens on a conflict) and then hold every suggestion up against that. In practice that meant reviewing designs before writing code, asking for changes in small, checkable steps, and verifying with tests and real runs instead of trusting how plausible something looked. Used that way, the AI made me faster without taking the design decisions out of my hands.
 
 ---
 
