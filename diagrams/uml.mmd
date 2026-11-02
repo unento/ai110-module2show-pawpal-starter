@@ -4,10 +4,11 @@ classDiagram
     class Owner {
         +str name
         +int available_minutes
-        +list~str~ preferences
+        +dict~str, str~ preferences
         +list~Pet~ pets
         +add_pet(pet: Pet) None
         +get_pets() list~Pet~
+        +get_all_tasks() list~tuple~
     }
 
     class Pet {
@@ -26,22 +27,49 @@ classDiagram
         +str priority
         +str category
         +str preferred_time
-        +edit(**fields) None
+        +str frequency
+        +bool completed
+        +date due_date
+        +str start_time
+        +str id
+        +edit(**changes) None
         +is_high_priority() bool
+        +mark_complete() Task
     }
 
     class Scheduler {
         +Owner owner
-        +list~Task~ tasks
-        +sort_by_priority() list~Task~
+        +date today
+        +collect_tasks() list~tuple~
+        +complete_task(pet: Pet, task: Task) Task
+        +filter_tasks(completed: bool, pet_name: str) list~tuple~
+        +preferred_time_for(task: Task) str
+        +sort_by_priority(pairs) list~tuple~
         +fits_in_time(task: Task, minutes_left: int) bool
+        +sort_by_time(tasks: list~Task~) list~Task~
+        +order_by_time_of_day(items) list~PlanItem~
+        +assign_clock_times(items) list~PlanItem~
+        +detect_conflicts(items) list~str~
+        +add_task(pet: Pet, task: Task) list~str~
         +generate_plan() DailyPlan
     }
 
+    class PlanItem {
+        +Pet pet
+        +Task task
+        +str reason
+        +str time
+        +int start_minute
+        +end_minute() int
+        +start() str
+        +end() str
+    }
+
     class DailyPlan {
-        +list~Task~ scheduled_tasks
-        +list~Task~ skipped_tasks
-        +list~str~ reasons
+        +int available_minutes
+        +list~PlanItem~ scheduled
+        +list~PlanItem~ skipped
+        +list~str~ conflicts
         +total_time() int
         +explain() str
         +to_table() list~dict~
@@ -50,6 +78,7 @@ classDiagram
     Owner "1" o-- "0..*" Pet : owns
     Pet "1" *-- "0..*" Task : has
     Scheduler --> Owner : plans for
-    Scheduler ..> Task : considers
     Scheduler ..> DailyPlan : creates
-    DailyPlan o-- Task : contains
+    DailyPlan "1" *-- "0..*" PlanItem : contains
+    PlanItem --> Pet : for
+    PlanItem --> Task : wraps
