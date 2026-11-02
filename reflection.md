@@ -2,6 +2,12 @@
 
 ## 1. System Design
 
+**Core user actions**
+
+1. Enter basic info about themselves and their pet (name, species, etc.).
+2. Add or edit care tasks like walks, feeding, or meds, with a duration and priority for each.
+3. Generate a daily schedule that fits their available time, prioritizes the important tasks, and explains why it was arranged that way.
+
 **a. Initial design**
 
 - Briefly describe your initial UML design.
